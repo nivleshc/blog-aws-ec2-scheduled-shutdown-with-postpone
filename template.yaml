@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion : '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Parameters:
+  SequenceNumber:
+    Type: String
+    Default: 1
+    Description: This is used to deploy multiple versions of this solution within the same AWS Account. It is used to make resource names unique, across duplicate deployments in the same AWS Account
+
+  ApiGWStageName:
+    Type: String
+    Default: Prod
+    Description: Stage name for the API Gateway
+
+  EmailFromAddress:
+    Type: String
+    Description: The FROM address that will be used to send emails to EC2 owners
+
+  SendEmailBeforeMin:
+    Type: Number
+    Default: 15
+    Description: This is the number of minutes before the automated shutdown that an email will be sent to the owner.
+
+  EC2ShutdownWindow:
+    Type: Number
+    Default: 10
+    Description: If a running EC2 instance is found that has an actual shutdown time that was at most this many minutes in the past, it will be automatically shutdown.
+
+  PostponeShutdownByHrs:
+    Type: Number
+    Default: 1
+    Description: The number of hours to allow the EC2 owner to postpone the instance shutdown by. Default is 1 hour.
+
+  TokenTTLMin:
+    Type: Number
+    Default: 15
+    Description: This is how long (in minutes) a postponement token will be valid for (corresponds to the DynamoDB entry for this token)
+
+Resources:
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      EndpointConfiguration: REGIONAL
+      Name: !Join [ '-', [ 'APIPostponeEC2Shutdown', !Ref SequenceNumber ] ]
+      StageName: !Ref ApiGWStageName
+      Models:
+        DefaultResponseModel:
+          type: object
+          properties:
+            message:
+              type: string
+
+  ApiGWUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGateway
+          Stage: !Ref ApiGWStageName
+        - ApiId: !Ref ApiGateway
+          Stage: Stage #this is a bug with SAM. It also creates s 'Stage' Stage
+      Description: Usage plan for the Api Gateway
+      Quota:
+        Limit: 1000
+        Offset: 0
+        Period: DAY
+      Throttle:
+        RateLimit: 5
+        BurstLimit: 10
+      UsagePlanName: !Join [ '-', [ 'EC2ShutdownAPIGWUsagePlan', !Ref SequenceNumber ] ]
+    DependsOn: 
+      - ApiGatewayStage
+
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: Token
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      TableName: !Join [ '-', [ 'EC2AutomatedShutdownRecordsTable', !Ref SequenceNumber ] ]
+      KeySchema:
+        - AttributeName: Token
+          KeyType: "HASH"
+      TimeToLiveSpecification:
+        AttributeName: ExpirationTime
+        Enabled: True
+
+  SESEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref EmailFromAddress
+
+  AutoShutdownEC2Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/AutoShutdownEC2.lambda_handler
+      Runtime: python3.7
+      Timeout: 300
+      Events:
+        CloudWatchEventsSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: 'rate(5 minutes)'
+            Name: !Join [ '-', [ 'Check-for-EC2-Instances-to-shutdown', !Ref SequenceNumber ] ]
+            Description: Check if there are any running EC2 instances that need to be shutdown
+            Enabled: True
+      Environment:
+        Variables:
+          API_GATEWAY_POSTPONE_ENDPOINT: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiGWStageName}/postpone'
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTable
+          EC2_SHUTDOWN_WINDOW: !Ref EC2ShutdownWindow
+          TOKEN_TTL_MIN: !Ref TokenTTLMin
+          SEND_EMAIL_BEFORE_MIN: !Ref SendEmailBeforeMin
+          EMAIL_FROM_ADDRESS: !Ref EmailFromAddress
+      Policies:
+      - Statement:
+        - Sid: AutoShutdownEC2Permissions
+          Effect: Allow
+          Action:
+          - ec2:DescribeInstances
+          - ec2:CreateTags
+          - ec2:DeleteTags
+          - ec2:UpdateTags
+          - ec2:StopInstances
+          - ses:SendEmail
+          Resource: '*'
+        - Sid: AutoShutdownEC2DynamoDBPermissions
+          Effect: Allow
+          Action:
+          - dynamodb:PutItem
+          Resource: !GetAtt DynamoDBTable.Arn
+
+  PostponeEC2ShutdownFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/PostponeEC2Shutdown.lambda_handler
+      Runtime: python3.7
+      Timeout: 300
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            Path: /postpone
+            Method: post
+            RestApiId: !Ref ApiGateway
+            RequestModel:
+              Model: DefaultResponseModel
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTable
+          SEND_EMAIL_BEFORE_MIN: !Ref SendEmailBeforeMin
+          POSTPONE_SHUTDOWN_BY_HRS: !Ref PostponeShutdownByHrs
+      Policies:
+      - Statement:
+        - Sid: PostponeEC2ShutdownPermissions
+          Effect: Allow
+          Action:
+          - ec2:DescribeInstances
+          - ec2:DescribeTags
+          - ec2:CreateTags
+          - ec2:DeleteTags
+          - ec2:UpdateTags
+          Resource: '*'
+        - Sid: PostponeShutdownEC2DynamoDBPermissions
+          Effect: Allow
+          Action:
+          - dynamodb:GetItem
+          - dynamodb:DeleteItem
+          Resource: !GetAtt DynamoDBTable.Arn
+Outputs:
+  APIGWDomainName:
+    Description: API Gateway Domain Name
+    Value: !Sub '${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com'
+  APIGWInvokeURL:
+    Description: API Gateway Invoke URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiGWStageName}/postpone'
