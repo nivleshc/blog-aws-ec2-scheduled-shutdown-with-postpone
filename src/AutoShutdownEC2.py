@@ -87,7 +87,7 @@ def process_ec2_shutdown_events():
             {
                 'Name': 'tag:autoshutdown',
                 'Values': [
-                    'true'
+                    'True'
                 ]
             },
             {
@@ -107,7 +107,7 @@ def process_ec2_shutdown_events():
     if ( num_instances_found == 0):
         print(">process_ec2_shutdown_events. No running ec2 instances with tag autoshutdown=true were found. Exiting")
     else:
-        print(">Found " + str(num_instances_found) + " running instance(s) with tag autoshutdown=true")
+        print(">Found " + str(num_instances_found) + " running instance(s) with tag autoshutdown=True")
         # process each ec2 instance matching filter
         for ec2Instance in ec2Instances['Reservations']:
             instance = ec2Instance['Instances'][0]
