@@ -8,7 +8,9 @@ The backend is deployed using Amazon API Gateway, Amazon DynamoDB, Amazon EventB
 
 The solution uses AWS Serverless Application Model (SAM) to deploy resources in to an AWS Account. The AWS Lambda function is written in Python 3.7.
 
-For detailed instructions, please visit https://nivleshc.wordpress.com/2022/08/01/scheduled-shutdown-of-amazon-ec2-instances-with-the-ability-to-postpone-backend/
+For detailed instructions, on how to deploy this solution, please visit https://nivleshc.wordpress.com/2022/08/01/scheduled-shutdown-of-amazon-ec2-instances-with-the-ability-to-postpone-backend/
+
+The user guide is available at https://nivleshc.wordpress.com/2022/08/04/scheduled-shutdown-of-amazon-ec2-instances-with-the-ability-to-postpone-user-guide/
 
 # Backend  
 ## Preparation
